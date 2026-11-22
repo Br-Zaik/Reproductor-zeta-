@@ -1,38 +1,83 @@
-name: Descomprimir y Compilar APK
+name: Reproductor Zeta - Compilar APK
 
 on:
   push:
-    branches: [ main, master ]
+    paths:
+      - '*.zip'
+      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Descomprimir ReproductorPro.zip
-        run: |
-          unzip -o ReproductorPro.zip -d proyecto_app
-
-      - name: Configurar JDK 17
+      - name: Preparar Java 17 (Estable para Android)
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
           distribution: 'temurin'
+          java-version: '17'
 
-      - name: Configurar Gradle 8.7
+      - name: Preparar Gradle 8.7 (Compatible)
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Compilar APK Debug
-        working-directory: ./proyecto_app
-        run: gradle assembleDebug --no-daemon
+      - name: Extraer proyecto actual
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf extracted output
+          mkdir -p extracted output
 
-      - name: Subir APK listo para descargar
+          ZIP="$(find . -maxdepth 1 -type f -iname '*.zip' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          if [ -z "$ZIP" ]; then
+            echo 'ERROR: No se encontró ningún archivo ZIP en la raíz del repositorio.'
+            exit 1
+          fi
+
+          echo "Usando ZIP: $ZIP"
+          unzip -q -o "$ZIP" -d extracted
+
+          SETTINGS="$(find extracted -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit)"
+          if [ -z "$SETTINGS" ]; then
+            echo 'ERROR: El ZIP no contiene un proyecto Android Gradle válido.'
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Proyecto detectado en: $PROJECT_DIR"
+
+      - name: Limpiar y Compilar APK Debug (Con reporte de errores detallado)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Limpiamos cachés locales previas y compilamos con stacktrace para forzar logs visibles si algo falla
+          gradle -p "$PROJECT_DIR" clean :app:assembleDebug --stacktrace --no-daemon --console=plain
+
+      - name: Preparar APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' -print | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo 'ERROR: La compilación no generó ningún APK.'
+            exit 1
+          fi
+          # Guardamos con el nombre Reproductor Zeta
+          cp "$APK" output/Reproductor-Zeta-debug.apk
+          ls -lh output/Reproductor-Zeta-debug.apk
+
+      - name: Subir APK
         uses: actions/upload-artifact@v4
         with:
-          name: ReproductorPro-APK
-          path: proyecto_app/app/build/outputs/apk/debug/app-debug.apk
+          name: Reproductor-Zeta-APK
+          path: output/Reproductor-Zeta-debug.apk
+          if-no-files-found: error
+          retention-days: 14
